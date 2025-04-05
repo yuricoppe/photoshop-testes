@@ -226,6 +226,9 @@ if (app.documents.length > 0) {
                         var fileName = sublayer.name.replace(/[^a-zA-Z0-9]/g, "_");
                         var filePath = new File(artboardFolder + "/" + fileName + ".png");
                         
+                        // Check if file is new
+                        var isNewFile = !filePath.exists;
+                        
                         // Store original document crop
                         var originalCrop = doc.cropBox;
                         
@@ -243,7 +246,8 @@ if (app.documents.length > 0) {
                         // Export the group
                         doc.exportDocument(filePath, ExportType.SAVEFORWEB, exportOptions);
                         
-                        // Add to exported groups
+                        // Add to exported groups with new file status
+                        groupInfo.isNew = isNewFile;
                         exportedGroups.push(groupInfo);
                         
                         // Restore original crop
@@ -270,32 +274,33 @@ if (app.documents.length > 0) {
         }
         
         // Generate new report
-        var report = "Export Report\n";
-        report += "-------------\n\n";
-        report += "System Information:\n";
-        report += "Date: " + systemInfo.date + "\n";
-        report += "User: " + systemInfo.user + "\n";
-        report += "Photoshop Version: " + systemInfo.photoshop + "\n";
-        report += "Operating System: " + systemInfo.os + "\n";
-        report += "OS Version: " + systemInfo.osVersion + "\n\n";
+        var report = "Relatório de Exportação\n";
+        report += "----------------------\n\n";
+        report += "Informações do Sistema:\n";
+        report += "Data: " + systemInfo.date + "\n";
+        report += "Usuário: " + systemInfo.user + "\n";
+        report += "Versão do Photoshop: " + systemInfo.photoshop + "\n";
+        report += "Sistema Operacional: " + systemInfo.os + "\n";
+        report += "Versão do SO: " + systemInfo.osVersion + "\n\n";
         
-        report += "Exported Groups (" + exportedGroups.length + "):\n";
+        report += "Grupos Exportados (" + exportedGroups.length + "):\n";
         for (var i = 0; i < exportedGroups.length; i++) {
             var group = exportedGroups[i];
             report += "- " + group.artboard + " > " + group.name + 
-                     (group.color === 'green' ? " (Ready)" : "") + "\n";
+                     (group.color === 'green' ? " (Pronto)" : "") +
+                     (group.isNew ? " (Novo)" : "") + "\n";
         }
         
-        report += "\nBlank Groups (" + blankGroups.length + "):\n";
+        report += "\nGrupos em Branco (" + blankGroups.length + "):\n";
         for (var i = 0; i < blankGroups.length; i++) {
             var group = blankGroups[i];
             report += "- " + group.artboard + " > " + group.name + "\n";
         }
         
-        report += "\nSkipped Groups (" + skippedGroups.length + "):\n";
+        report += "\nGrupos Ignorados (" + skippedGroups.length + "):\n";
         for (var i = 0; i < skippedGroups.length; i++) {
             var group = skippedGroups[i];
-            report += "- " + group.artboard + " > " + group.name + " (Marked as not ready)\n";
+            report += "- " + group.artboard + " > " + group.name + " (Marcado como não pronto)\n";
         }
         
         // Add separator and previous report if it exists
@@ -310,11 +315,11 @@ if (app.documents.length > 0) {
         reportFile.write(report);
         reportFile.close();
         
-        alert("Export completed!\n\n" +
-              "Exported: " + exportedGroups.length + " groups\n" +
-              "Blank: " + blankGroups.length + " groups\n" +
-              "Skipped: " + skippedGroups.length + " groups\n\n" +
-              "See export_report.txt for details");
+        alert("Exportação concluída!\n\n" +
+              "Exportados: " + exportedGroups.length + " grupos\n" +
+              "Em branco: " + blankGroups.length + " grupos\n" +
+              "Ignorados: " + skippedGroups.length + " grupos\n\n" +
+              "Consulte export_report.txt para mais detalhes");
     }
 } else {
     alert("Please open a document first!");
