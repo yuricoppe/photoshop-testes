@@ -60,101 +60,48 @@ if (app.documents.length > 0) {
         }
     }
     
-    // Function to calculate MD5 hash of a file
-    function calculateMD5(file) {
+    // Function to compare two files byte by byte
+    function compareFiles(file1, file2) {
+        if (!file1.exists || !file2.exists) return false;
+        
         try {
-            if (!file.exists) return null;
+            // Get file sizes
+            var size1 = file1.length;
+            var size2 = file2.length;
             
-            // Read file as binary
-            file.encoding = 'BINARY';
-            file.open('r');
-            var content = file.read();
-            file.close();
+            // If sizes are different, files are different
+            if (size1 !== size2) return false;
             
-            // Simple hash function (since we can't use MD5 directly in ExtendScript)
-            var hash = 0;
-            for (var i = 0; i < content.length; i++) {
-                hash = ((hash << 5) - hash) + content.charCodeAt(i);
-                hash = hash & hash; // Convert to 32-bit integer
-            }
-            return hash.toString();
-        } catch(e) {
-            return null;
-        }
-    }
-    
-    // Function to check if file should be exported
-    function shouldExportGroup(group, filePath, artboardBounds) {
-        var file = new File(filePath);
-        
-        // If file doesn't exist, should export
-        if (!file.exists) {
-            return { shouldExport: true, reason: "New file" };
-        }
-        
-        // Store current visibility states and crop
-        var tempVisibilities = [];
-        var originalCrop = doc.cropBox;
-        
-        function storeTemp(layer) {
-            if (layer.typename === "LayerSet" && layer.layers) {
-                for (var i = 0; i < layer.layers.length; i++) {
-                    tempVisibilities.push({
-                        layer: layer.layers[i],
-                        visible: layer.layers[i].visible
-                    });
-                    storeTemp(layer.layers[i]);
+            // Open both files in binary mode
+            file1.encoding = 'BINARY';
+            file2.encoding = 'BINARY';
+            file1.open('r');
+            file2.open('r');
+            
+            // Read files in chunks to handle large files
+            var chunkSize = 4096;
+            var areEqual = true;
+            
+            while (!file1.eof && areEqual) {
+                var chunk1 = file1.read(chunkSize);
+                var chunk2 = file2.read(chunkSize);
+                
+                if (chunk1 !== chunk2) {
+                    areEqual = false;
                 }
             }
+            
+            // Close files
+            file1.close();
+            file2.close();
+            
+            return areEqual;
+        } catch(e) {
+            if (file1.exists) file1.close();
+            if (file2.exists) file2.close();
+            return false;
         }
-        storeTemp(group);
-        
-        // Calculate hash of existing file
-        var existingHash = calculateMD5(file);
-        
-        // Export to temporary file
-        var tempPath = filePath + ".temp";
-        var tempFile = new File(tempPath);
-        
-        // Set crop to artboard bounds
-        doc.crop([artboardBounds[0], artboardBounds[1], artboardBounds[2], artboardBounds[3]]);
-        
-        // Set up temporary export
-        var exportOptions = new ExportOptionsSaveForWeb();
-        exportOptions.format = SaveDocumentType.PNG;
-        exportOptions.PNG8 = false;
-        exportOptions.transparency = true;
-        exportOptions.interlaced = false;
-        exportOptions.quality = 100;
-        
-        // Export temporary file
-        doc.exportDocument(tempFile, ExportType.SAVEFORWEB, exportOptions);
-        
-        // Calculate hash of new file
-        var newHash = calculateMD5(tempFile);
-        
-        // Clean up temp file
-        tempFile.remove();
-        
-        // Restore crop
-        doc.cropBox = originalCrop;
-        
-        // Restore visibility states
-        for (var i = 0; i < tempVisibilities.length; i++) {
-            var item = tempVisibilities[i];
-            item.layer.visible = item.visible;
-        }
-        
-        // Compare hashes
-        if (existingHash !== newHash) {
-            return { shouldExport: true, reason: "Content modified" };
-        }
-        
-        return { shouldExport: false, reason: "No changes" };
     }
-    
-    // Store original visibilities before starting
-    storeVisibilities(layers);
     
     // Function to check if a group is marked with a specific color
     function getGroupColor(group) {
@@ -191,6 +138,9 @@ if (app.documents.length > 0) {
     }
     
     try {
+        // Store original visibilities before starting
+        storeVisibilities(layers);
+        
         // Process each layer in the document
         for (var i = 0; i < layers.length; i++) {
             var layer = layers[i];
@@ -276,39 +226,28 @@ if (app.documents.length > 0) {
                         var fileName = sublayer.name.replace(/[^a-zA-Z0-9]/g, "_");
                         var filePath = new File(artboardFolder + "/" + fileName + ".png");
                         
-                        // Check if we should export this group
-                        var exportCheck = shouldExportGroup(sublayer, filePath, [left, top, right, bottom]);
+                        // Store original document crop
+                        var originalCrop = doc.cropBox;
                         
-                        if (exportCheck.shouldExport) {
-                            // Store original document crop
-                            var originalCrop = doc.cropBox;
-                            
-                            // Set crop to artboard bounds
-                            doc.crop([left, top, right, bottom]);
-                            
-                            // Create export options
-                            var exportOptions = new ExportOptionsSaveForWeb();
-                            exportOptions.format = SaveDocumentType.PNG;
-                            exportOptions.PNG8 = false;
-                            exportOptions.transparency = true;
-                            exportOptions.interlaced = false;
-                            exportOptions.quality = 100;
-                            
-                            // Export the group
-                            doc.exportDocument(filePath, ExportType.SAVEFORWEB, exportOptions);
-                            
-                            // Add to exported and modified groups
-                            exportedGroups.push(groupInfo);
-                            groupInfo.reason = exportCheck.reason;
-                            modifiedGroups.push(groupInfo);
-                            
-                            // Restore original crop
-                            doc.cropBox = originalCrop;
-                        } else {
-                            // Add to unchanged groups
-                            groupInfo.reason = exportCheck.reason;
-                            unchangedGroups.push(groupInfo);
-                        }
+                        // Set crop to artboard bounds
+                        doc.crop([left, top, right, bottom]);
+                        
+                        // Create export options
+                        var exportOptions = new ExportOptionsSaveForWeb();
+                        exportOptions.format = SaveDocumentType.PNG;
+                        exportOptions.PNG8 = false;
+                        exportOptions.transparency = true;
+                        exportOptions.interlaced = false;
+                        exportOptions.quality = 100;
+                        
+                        // Export the group
+                        doc.exportDocument(filePath, ExportType.SAVEFORWEB, exportOptions);
+                        
+                        // Add to exported groups
+                        exportedGroups.push(groupInfo);
+                        
+                        // Restore original crop
+                        doc.cropBox = originalCrop;
                     }
                 }
             }
@@ -340,18 +279,11 @@ if (app.documents.length > 0) {
         report += "Operating System: " + systemInfo.os + "\n";
         report += "OS Version: " + systemInfo.osVersion + "\n\n";
         
-        report += "Modified Groups (" + modifiedGroups.length + "):\n";
-        for (var i = 0; i < modifiedGroups.length; i++) {
-            var group = modifiedGroups[i];
+        report += "Exported Groups (" + exportedGroups.length + "):\n";
+        for (var i = 0; i < exportedGroups.length; i++) {
+            var group = exportedGroups[i];
             report += "- " + group.artboard + " > " + group.name + 
-                     (group.color === 'green' ? " (Ready)" : "") +
-                     " - " + group.reason + "\n";
-        }
-        
-        report += "\nUnchanged Groups (" + unchangedGroups.length + "):\n";
-        for (var i = 0; i < unchangedGroups.length; i++) {
-            var group = unchangedGroups[i];
-            report += "- " + group.artboard + " > " + group.name + "\n";
+                     (group.color === 'green' ? " (Ready)" : "") + "\n";
         }
         
         report += "\nBlank Groups (" + blankGroups.length + "):\n";
@@ -379,8 +311,7 @@ if (app.documents.length > 0) {
         reportFile.close();
         
         alert("Export completed!\n\n" +
-              "Modified: " + modifiedGroups.length + " groups\n" +
-              "Unchanged: " + unchangedGroups.length + " groups\n" +
+              "Exported: " + exportedGroups.length + " groups\n" +
               "Blank: " + blankGroups.length + " groups\n" +
               "Skipped: " + skippedGroups.length + " groups\n\n" +
               "See export_report.txt for details");
