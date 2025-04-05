@@ -6,6 +6,15 @@
 if (app.documents.length > 0) {
     var doc = app.activeDocument;
     
+    // Get system information
+    var systemInfo = {
+        date: new Date().toLocaleString(),
+        user: $.getenv("USER") || $.getenv("USERNAME") || "Unknown",
+        photoshop: app.version,
+        os: $.os.match(/windows/i) ? "Windows" : "macOS",
+        osVersion: $.os
+    };
+    
     // Store original ruler units and change to pixels
     var originalRulerUnits = app.preferences.rulerUnits;
     app.preferences.rulerUnits = Units.PIXELS;
@@ -20,6 +29,8 @@ if (app.documents.length > 0) {
     var exportedGroups = [];
     var skippedGroups = [];
     var blankGroups = [];
+    var unchangedGroups = [];
+    var modifiedGroups = [];
     
     // Get all layers in the document
     var layers = doc.layers;
@@ -47,6 +58,99 @@ if (app.documents.length > 0) {
             var item = originalVisibilities[i];
             item.layer.visible = item.visible;
         }
+    }
+    
+    // Function to calculate MD5 hash of a file
+    function calculateMD5(file) {
+        try {
+            if (!file.exists) return null;
+            
+            // Read file as binary
+            file.encoding = 'BINARY';
+            file.open('r');
+            var content = file.read();
+            file.close();
+            
+            // Simple hash function (since we can't use MD5 directly in ExtendScript)
+            var hash = 0;
+            for (var i = 0; i < content.length; i++) {
+                hash = ((hash << 5) - hash) + content.charCodeAt(i);
+                hash = hash & hash; // Convert to 32-bit integer
+            }
+            return hash.toString();
+        } catch(e) {
+            return null;
+        }
+    }
+    
+    // Function to check if file should be exported
+    function shouldExportGroup(group, filePath, artboardBounds) {
+        var file = new File(filePath);
+        
+        // If file doesn't exist, should export
+        if (!file.exists) {
+            return { shouldExport: true, reason: "New file" };
+        }
+        
+        // Store current visibility states and crop
+        var tempVisibilities = [];
+        var originalCrop = doc.cropBox;
+        
+        function storeTemp(layer) {
+            if (layer.typename === "LayerSet" && layer.layers) {
+                for (var i = 0; i < layer.layers.length; i++) {
+                    tempVisibilities.push({
+                        layer: layer.layers[i],
+                        visible: layer.layers[i].visible
+                    });
+                    storeTemp(layer.layers[i]);
+                }
+            }
+        }
+        storeTemp(group);
+        
+        // Calculate hash of existing file
+        var existingHash = calculateMD5(file);
+        
+        // Export to temporary file
+        var tempPath = filePath + ".temp";
+        var tempFile = new File(tempPath);
+        
+        // Set crop to artboard bounds
+        doc.crop([artboardBounds[0], artboardBounds[1], artboardBounds[2], artboardBounds[3]]);
+        
+        // Set up temporary export
+        var exportOptions = new ExportOptionsSaveForWeb();
+        exportOptions.format = SaveDocumentType.PNG;
+        exportOptions.PNG8 = false;
+        exportOptions.transparency = true;
+        exportOptions.interlaced = false;
+        exportOptions.quality = 100;
+        
+        // Export temporary file
+        doc.exportDocument(tempFile, ExportType.SAVEFORWEB, exportOptions);
+        
+        // Calculate hash of new file
+        var newHash = calculateMD5(tempFile);
+        
+        // Clean up temp file
+        tempFile.remove();
+        
+        // Restore crop
+        doc.cropBox = originalCrop;
+        
+        // Restore visibility states
+        for (var i = 0; i < tempVisibilities.length; i++) {
+            var item = tempVisibilities[i];
+            item.layer.visible = item.visible;
+        }
+        
+        // Compare hashes
+        if (existingHash !== newHash) {
+            return { shouldExport: true, reason: "Content modified" };
+        }
+        
+        return { shouldExport: false, reason: "No changes" };
     }
     
     // Store original visibilities before starting
@@ -168,32 +272,43 @@ if (app.documents.length > 0) {
                             continue;
                         }
                         
-                        // Create export options
-                        var exportOptions = new ExportOptionsSaveForWeb();
-                        exportOptions.format = SaveDocumentType.PNG;
-                        exportOptions.PNG8 = false;
-                        exportOptions.transparency = true;
-                        exportOptions.interlaced = false;
-                        exportOptions.quality = 100;
-                        
                         // Create the file path
                         var fileName = sublayer.name.replace(/[^a-zA-Z0-9]/g, "_");
                         var filePath = new File(artboardFolder + "/" + fileName + ".png");
                         
-                        // Store original document crop
-                        var originalCrop = doc.cropBox;
+                        // Check if we should export this group
+                        var exportCheck = shouldExportGroup(sublayer, filePath, [left, top, right, bottom]);
                         
-                        // Set crop to artboard bounds
-                        doc.crop([left, top, right, bottom]);
-                        
-                        // Export the group
-                        doc.exportDocument(filePath, ExportType.SAVEFORWEB, exportOptions);
-                        
-                        // Add to exported groups
-                        exportedGroups.push(groupInfo);
-                        
-                        // Restore original crop
-                        doc.cropBox = originalCrop;
+                        if (exportCheck.shouldExport) {
+                            // Store original document crop
+                            var originalCrop = doc.cropBox;
+                            
+                            // Set crop to artboard bounds
+                            doc.crop([left, top, right, bottom]);
+                            
+                            // Create export options
+                            var exportOptions = new ExportOptionsSaveForWeb();
+                            exportOptions.format = SaveDocumentType.PNG;
+                            exportOptions.PNG8 = false;
+                            exportOptions.transparency = true;
+                            exportOptions.interlaced = false;
+                            exportOptions.quality = 100;
+                            
+                            // Export the group
+                            doc.exportDocument(filePath, ExportType.SAVEFORWEB, exportOptions);
+                            
+                            // Add to exported and modified groups
+                            exportedGroups.push(groupInfo);
+                            groupInfo.reason = exportCheck.reason;
+                            modifiedGroups.push(groupInfo);
+                            
+                            // Restore original crop
+                            doc.cropBox = originalCrop;
+                        } else {
+                            // Add to unchanged groups
+                            groupInfo.reason = exportCheck.reason;
+                            unchangedGroups.push(groupInfo);
+                        }
                     }
                 }
             }
@@ -205,14 +320,38 @@ if (app.documents.length > 0) {
         // Restore original ruler units
         app.preferences.rulerUnits = originalRulerUnits;
         
-        // Generate report
-        var report = "Export Report:\n\n";
+        // Read existing report if it exists
+        var existingReport = "";
+        var reportFile = new File(baseFolder + "/export_report.txt");
+        if (reportFile.exists) {
+            reportFile.encoding = "UTF-8";
+            reportFile.open("r");
+            existingReport = reportFile.read();
+            reportFile.close();
+        }
         
-        report += "Successfully Exported Groups (" + exportedGroups.length + "):\n";
-        for (var i = 0; i < exportedGroups.length; i++) {
-            var group = exportedGroups[i];
+        // Generate new report
+        var report = "Export Report\n";
+        report += "-------------\n\n";
+        report += "System Information:\n";
+        report += "Date: " + systemInfo.date + "\n";
+        report += "User: " + systemInfo.user + "\n";
+        report += "Photoshop Version: " + systemInfo.photoshop + "\n";
+        report += "Operating System: " + systemInfo.os + "\n";
+        report += "OS Version: " + systemInfo.osVersion + "\n\n";
+        
+        report += "Modified Groups (" + modifiedGroups.length + "):\n";
+        for (var i = 0; i < modifiedGroups.length; i++) {
+            var group = modifiedGroups[i];
             report += "- " + group.artboard + " > " + group.name + 
-                     (group.color === 'green' ? " (Ready)" : "") + "\n";
+                     (group.color === 'green' ? " (Ready)" : "") +
+                     " - " + group.reason + "\n";
+        }
+        
+        report += "\nUnchanged Groups (" + unchangedGroups.length + "):\n";
+        for (var i = 0; i < unchangedGroups.length; i++) {
+            var group = unchangedGroups[i];
+            report += "- " + group.artboard + " > " + group.name + "\n";
         }
         
         report += "\nBlank Groups (" + blankGroups.length + "):\n";
@@ -227,14 +366,21 @@ if (app.documents.length > 0) {
             report += "- " + group.artboard + " > " + group.name + " (Marked as not ready)\n";
         }
         
+        // Add separator and previous report if it exists
+        if (existingReport) {
+            report += "\n\n----------------------------------------\n\n";
+            report += existingReport;
+        }
+        
         // Save report to file
-        var reportFile = new File(baseFolder + "/export_report.txt");
+        reportFile.encoding = "UTF-8";
         reportFile.open('w');
         reportFile.write(report);
         reportFile.close();
         
         alert("Export completed!\n\n" +
-              "Exported: " + exportedGroups.length + " groups\n" +
+              "Modified: " + modifiedGroups.length + " groups\n" +
+              "Unchanged: " + unchangedGroups.length + " groups\n" +
               "Blank: " + blankGroups.length + " groups\n" +
               "Skipped: " + skippedGroups.length + " groups\n\n" +
               "See export_report.txt for details");
